@@ -3,39 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Private Cloud Streamer</title>
+    <title>Cloud Video Player</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
-        body { font-family: -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-        .box { background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); width: 100%; max-width: 800px; text-align: center; }
-        input { width: 80%; padding: 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: white; margin-bottom: 15px; }
-        button { background: #10b981; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; cursor: pointer; }
-        button:disabled { background: #475569; }
-        video { width: 100%; aspect-ratio: 16/9; margin-top: 20px; background: black; border-radius: 8px; }
-        .status { margin-top: 10px; color: #94a3b8; font-size: 0.9em; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .card { background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); width: 100%; max-width: 900px; text-align: center; border: 1px solid #334155; }
+        h1 { margin-bottom: 20px; font-weight: 800; color: #10b981; }
+        input { width: 90%; padding: 14px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; margin-bottom: 20px; font-size: 16px; outline: none; }
+        input:focus { border-color: #10b981; }
+        button { background: #10b981; color: #064e3b; border: none; padding: 14px 40px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; transition: 0.2s; }
+        button:hover { background: #34d399; }
+        button:disabled { background: #475569; color: #94a3b8; cursor: wait; }
+        video { width: 100%; aspect-ratio: 16/9; margin-top: 25px; background: #000; border-radius: 12px; border: 1px solid #334155; }
+        #status { margin-top: 15px; color: #94a3b8; font-weight: 500; min-height: 20px; }
+        .error { color: #f87171 !important; }
     </style>
 </head>
 <body>
-    <div class="box">
-        <h2>Cloud Video Streamer</h2>
-        <input type="text" id="url" placeholder="Paste link (YouTube or Direct .m4v/.mp4)...">
+    <div class="card">
+        <h1>Cloud Streamer</h1>
+        <input type="text" id="url" placeholder="Paste Video Link (YouTube, Direct .m4v, .mp4, etc.)">
         <br>
-        <button id="playBtn">Start Stream</button>
-        <div id="status" class="status">Ready</div>
-        <video id="video" controls></video>
+        <button id="playBtn">Initialize Stream</button>
+        <div id="status">Ready</div>
+        <video id="video" controls playsinline></video>
     </div>
 
     <script>
         const video = document.getElementById('video');
         const playBtn = document.getElementById('playBtn');
         const status = document.getElementById('status');
+        let hls = null;
 
         playBtn.onclick = async () => {
             const url = document.getElementById('url').value.trim();
-            if (!url) return;
+            if (!url) return alert("Please paste a URL");
 
+            // Reset UI and Video
+            if (hls) hls.destroy();
+            video.pause();
+            status.innerText = "Processing large file... Please wait (up to 30s)";
+            status.className = "";
             playBtn.disabled = true;
-            status.innerText = "Initializing proxy stream... (Please wait 10s)";
 
             try {
                 const res = await fetch('/start', {
@@ -43,28 +52,55 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url })
                 });
+
+                if (!res.ok) {
+                    const errorData = await res.json();
+                    throw new Error(errorData.detail || "Server failed to start stream");
+                }
+
                 const data = await res.json();
                 
                 if (data.url) {
-                    status.innerText = "Stream Live!";
-                    if (Hls.isSupported()) {
-                        const hls = new Hls();
-                        hls.loadSource(data.url);
-                        hls.attachMedia(video);
-                        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
-                    } else {
-                        video.src = data.url;
-                        video.play();
-                    }
-                } else {
-                    throw new Error(data.detail);
+                    status.innerText = "Buffering stream...";
+                    startHls(data.url);
                 }
             } catch (e) {
                 status.innerText = "Error: " + e.message;
-            } finally {
+                status.className = "error";
                 playBtn.disabled = false;
             }
         };
+
+        function startHls(streamUrl) {
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    manifestLoadingTimeOut: 30000,
+                    levelLoadingTimeOut: 30000,
+                    fragLoadingTimeOut: 30000,
+                    enableWorker: true,
+                    lowLatencyMode: true
+                });
+                hls.loadSource(streamUrl);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    status.innerText = "Streaming Live!";
+                    video.play().catch(e => console.log("Auto-play blocked, user must click play."));
+                    playBtn.disabled = false;
+                });
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        console.warn("HLS Error, attempting recovery...");
+                        hls.recoverMediaError();
+                    }
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native support (Safari)
+                video.src = streamUrl;
+                video.play();
+                status.innerText = "Streaming Live (Native)!";
+                playBtn.disabled = false;
+            }
+        }
     </script>
 </body>
 </html>
