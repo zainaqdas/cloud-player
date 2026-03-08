@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Private Cloud Streamer</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .box { background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); width: 100%; max-width: 800px; text-align: center; }
+        input { width: 80%; padding: 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: white; margin-bottom: 15px; }
+        button { background: #10b981; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+        button:disabled { background: #475569; }
+        video { width: 100%; aspect-ratio: 16/9; margin-top: 20px; background: black; border-radius: 8px; }
+        .status { margin-top: 10px; color: #94a3b8; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>Cloud Video Streamer</h2>
+        <input type="text" id="url" placeholder="Paste link (YouTube or Direct .m4v/.mp4)...">
+        <br>
+        <button id="playBtn">Start Stream</button>
+        <div id="status" class="status">Ready</div>
+        <video id="video" controls></video>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const playBtn = document.getElementById('playBtn');
+        const status = document.getElementById('status');
+
+        playBtn.onclick = async () => {
+            const url = document.getElementById('url').value.trim();
+            if (!url) return;
+
+            playBtn.disabled = true;
+            status.innerText = "Initializing proxy stream... (Please wait 10s)";
+
+            try {
+                const res = await fetch('/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+                
+                if (data.url) {
+                    status.innerText = "Stream Live!";
+                    if (Hls.isSupported()) {
+                        const hls = new Hls();
+                        hls.loadSource(data.url);
+                        hls.attachMedia(video);
+                        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+                    } else {
+                        video.src = data.url;
+                        video.play();
+                    }
+                } else {
+                    throw new Error(data.detail);
+                }
+            } catch (e) {
+                status.innerText = "Error: " + e.message;
+            } finally {
+                playBtn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>
