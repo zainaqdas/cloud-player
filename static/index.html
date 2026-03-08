@@ -6,19 +6,19 @@
     <title>Cloud Player Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
-        body { font-family: -apple-system, sans-serif; background: #0f172a; color: white; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-        .container { background: #1e293b; padding: 30px; border-radius: 12px; width: 100%; max-width: 800px; text-align: center; border: 1px solid #334155; }
-        input { width: 90%; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; margin-bottom: 20px; outline: none; }
-        button { background: #10b981; color: #064e3b; border: none; padding: 12px 30px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        button:disabled { background: #475569; cursor: wait; }
-        video { width: 100%; aspect-ratio: 16/9; margin-top: 20px; background: #000; border-radius: 8px; }
-        #status { margin-top: 15px; color: #94a3b8; font-size: 0.9em; }
+        body { font-family: sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .card { background: #1e293b; padding: 30px; border-radius: 12px; width: 100%; max-width: 700px; text-align: center; }
+        input { width: 90%; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; margin-bottom: 20px; }
+        button { background: #10b981; color: #064e3b; border: none; padding: 12px 30px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        button:disabled { background: #475569; }
+        video { width: 100%; margin-top: 20px; background: black; border-radius: 8px; }
+        #status { margin-top: 15px; color: #94a3b8; }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="card">
         <h1>Cloud Streamer</h1>
-        <input type="text" id="url" placeholder="Paste Video Link...">
+        <input type="text" id="url" placeholder="Paste link here...">
         <br>
         <button id="playBtn">Start Stream</button>
         <div id="status">Ready</div>
@@ -37,7 +37,7 @@
 
             if (hls) hls.destroy();
             playBtn.disabled = true;
-            status.innerText = "Initializing... Large videos may take 20s.";
+            status.innerText = "Transcoding for compatibility... (takes ~15 seconds)";
 
             try {
                 const res = await fetch('/start', {
@@ -48,7 +48,7 @@
                 const data = await res.json();
                 
                 if (data.url) {
-                    status.innerText = "Stream Found! Buffering...";
+                    status.innerText = "Streaming Live!";
                     startHls(data.url);
                 } else {
                     throw new Error(data.detail);
@@ -60,19 +60,18 @@
         };
 
         function startHls(streamUrl) {
-            // CACHE BUSTER: Adds a unique timestamp to the manifest URL
             const finalUrl = streamUrl + "?t=" + Date.now();
-
             if (Hls.isSupported()) {
                 hls = new Hls({
+                    // Faster loading settings
                     manifestLoadingTimeOut: 30000,
-                    fragLoadingTimeOut: 30000,
-                    enableWorker: true
+                    enableWorker: true,
+                    startLevel: 0,
+                    debug: false
                 });
                 hls.loadSource(finalUrl);
                 hls.attachMedia(video);
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    status.innerText = "Streaming Live!";
                     video.play();
                     playBtn.disabled = false;
                 });
@@ -80,7 +79,6 @@
                     if (data.fatal) hls.recoverMediaError();
                 });
             } else {
-                // Safari Fallback
                 video.src = finalUrl;
                 video.play();
                 playBtn.disabled = false;
