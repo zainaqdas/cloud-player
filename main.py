@@ -12,7 +12,6 @@ import yt_dlp
 
 app = FastAPI()
 
-# 1. Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,14 +19,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. ANTI-CACHE MIDDLEWARE (Fixes the "304 Not Modified" issue)
 @app.middleware("http")
 async def add_no_cache_headers(request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/streams"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
     return response
 
 STREAMS_DIR = "streams"
@@ -36,14 +32,10 @@ if not os.path.exists(STREAMS_DIR):
 
 class StreamRequest(BaseModel):
     url: str
-    quality: str = "best"
 
 def get_ffmpeg():
     path = shutil.which("ffmpeg")
-    if path: return path
-    for p in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg"]:
-        if os.path.exists(p): return p
-    return "ffmpeg"
+    return path if path else "ffmpeg"
 
 def cleanup_loop():
     while True:
@@ -51,10 +43,10 @@ def cleanup_loop():
             now = time.time()
             for folder in os.listdir(STREAMS_DIR):
                 path = os.path.join(STREAMS_DIR, folder)
-                if os.path.isdir(path) and (now - os.path.getmtime(path) > 1800):
+                if os.path.isdir(path) and (now - os.path.getmtime(path) > 3600):
                     shutil.rmtree(path)
         except: pass
-        time.sleep(300)
+        time.sleep(600)
 
 threading.Thread(target=cleanup_loop, daemon=True).start()
 
@@ -66,46 +58,49 @@ async def start_stream(req: StreamRequest):
     m3u8_path = os.path.join(output_dir, "index.m3u8")
 
     video_url = req.url
-    is_direct = any(x in req.url.lower() for x in [".mp4", ".m4v", ".mkv", ".mov", ".webm", ".avi"])
+    is_direct = any(x in req.url.lower() for x in [".mp4", ".m4v", ".mkv", ".mov", ".webm"])
 
     try:
         if not is_direct:
-            ydl_opts = {'format': 'best', 'quiet': True, 'no_warnings': True}
+            ydl_opts = {'format': 'best', 'quiet': True}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(req.url, download=False)
                 video_url = info.get('url')
 
-        # OPTIMIZED FFMPEG: Fast probing and reconnection for large files
+        # --- RE-ENCODING FOR COMPATIBILITY ---
+        # We use 'ultrafast' so Railway CPU handles it easily
+        # We use '-preset ultrafast' and '-crf 28' to keep it fast and light
         ffmpeg_cmd = [
             get_ffmpeg(),
             "-y",
             "-loglevel", "error",
-            "-probesize", "5M",
-            "-analyzeduration", "2000000",
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
             "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n",
             "-i", video_url,
-            "-c", "copy",
-            "-map", "0:v:0?", 
-            "-map", "0:a:0?",
+            "-c:v", "libx264",        # Convert to H.264 (Standard)
+            "-preset", "ultrafast",   # Use minimum CPU
+            "-crf", "28",             # Decent quality, low bitrate
+            "-c:a", "aac",            # Convert audio to AAC (Standard)
+            "-ar", "44100",
+            "-ac", "2",
             "-start_number", "0",
-            "-hls_time", "4",
-            "-hls_list_size", "10",
-            "-hls_flags", "delete_segments+append_list+split_by_time",
+            "-hls_time", "6",
+            "-hls_list_size", "5",
+            "-hls_flags", "delete_segments",
             "-f", "hls", m3u8_path
         ]
 
         subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # Wait for the first segment to be physically written to disk
-        for i in range(40):
+        # Wait for first segment
+        for i in range(60): # 60 seconds max wait for re-encoding to start
             if os.path.exists(m3u8_path):
                 segments = [f for f in os.listdir(output_dir) if f.endswith('.ts')]
                 if len(segments) >= 1:
                     return {"url": f"/streams/{stream_id}/index.m3u8"}
             time.sleep(1)
         
-        raise Exception("Timed out. Source file is too large or slow.")
+        raise Exception("Failed to start stream. Link might be dead or Railway is slow.")
 
     except Exception as e:
         if os.path.exists(output_dir): shutil.rmtree(output_dir)
